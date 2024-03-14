@@ -1,0 +1,309 @@
+Program.Sub.ScreenSU.Start
+Gui.frmDirectory..Create
+Gui.frmDirectory..Caption("Export Settings")
+Gui.frmDirectory..Size(5490,2535)
+Gui.frmDirectory..MinX(0)
+Gui.frmDirectory..MinY(0)
+Gui.frmDirectory..Position(0,0)
+Gui.frmDirectory..BackColor(-2147483633)
+Gui.frmDirectory..MousePointer(0)
+Gui.frmDirectory..Event(UnLoad,frmDirectory_Unload)
+Gui.frmDirectory..Sizeable(False)
+Gui.frmDirectory.lblDirectoryPath.Create(Label,"Directory Path:",True,3165,255,0,120,945,True,0,"Arial",8,-2147483633,0)
+Gui.frmDirectory.cmdSave.Create(Button)
+Gui.frmDirectory.cmdSave.Size(720,375)
+Gui.frmDirectory.cmdSave.Position(120,1665)
+Gui.frmDirectory.cmdSave.Caption("Save")
+Gui.frmDirectory.cmdSave.Event(Click,cmdSave_Click)
+Gui.frmDirectory.txtDirectoryPath.Create(TextBox,"",True,4665,345,0,120,1200,True,0,"Arial",8,-2147483643,1)
+Gui.frmDirectory.cmdFileBrowser.Create(Button)
+Gui.frmDirectory.cmdFileBrowser.Size(315,330)
+Gui.frmDirectory.cmdFileBrowser.Position(4815,1170)
+Gui.frmDirectory.cmdFileBrowser.Caption("^")
+Gui.frmDirectory.cmdFileBrowser.Event(Click,cmdFileBrowser_Click)
+Gui.frmDirectory.lblFileType.Create(Label,"File Type:",True,1935,255,0,120,135,True,0,"Arial",8,-2147483633,0)
+Gui.frmDirectory.cboFileType.Create(ComboBox)
+Gui.frmDirectory.cboFileType.Size(1950,360)
+Gui.frmDirectory.cboFileType.Position(120,435)
+Program.Sub.ScreenSU.End
+
+Program.Sub.Preflight.Start
+V.Global.bUnattended.Declare(Boolean)
+V.Global.bError.Declare(Boolean)
+V.Global.sSavedDirectoryPath.Declare(String)
+V.Global.sSavedFileType.Declare(String)
+Program.Sub.Preflight.End
+
+Program.Sub.Main.Start
+'GCG_5850_OpenMind_DataExtract.g2u
+'Ashley Collins
+'02/11/2020
+' Laminacorr Industries Inc
+'Quote 11959-0
+'This project will export work order data to a tab-delimited file. The file will be exported hourly, through Online Update.The file will then be used in Open Mind, a 3rd party scheduling solution.  
+'The project will allow the user to set up the export directory path through a maintenance screen.
+'Shop Floor Control > Admin > Open Mind Data Extract Setup [5850]
+
+F.Intrinsic.Control.Try
+V.Local.sSQL.Declare(String)
+V.Local.sRet.Declare(String)
+V.Local.sRunningFile.Declare(String)
+V.Local.bRunning.Declare(Boolean)
+F.ODBC.Connection!con.OpenConnection(V.Ambient.PDSN,V.Ambient.PUser,V.Ambient.PPass,3600)
+
+'if called from task gab hook, in online update, run export of  file. Otherwise, run the directory maintenance screen 
+F.Intrinsic.Control.If(V.Ambient.IsInTaskScheduler,=,True)
+	'Creates isRunning file to ensure that the process doesn't overstep
+	F.Intrinsic.String.Build("{0}\IsRunning.txt",V.Caller.FilesDir,V.Local.sRunningFile)
+	F.Intrinsic.File.Exists(V.Local.sRunningFile,V.Local.bRunning)
+	F.Intrinsic.Control.DoUntil(V.Local.bRunning,=,False)
+			F.Intrinsic.File.Exists(V.Local.sRunningFile,V.Local.bRunning)
+	F.Intrinsic.Control.Loop
+	F.Intrinsic.File.String2File(V.Local.sRunningFile,"Export is Running")
+	F.Intrinsic.Control.CallSub(LoadData)
+	F.Intrinsic.Control.CallSub(SaveFile)
+	F.Intrinsic.File.DeleteFile(V.Local.sRunningFile)
+	F.ODBC.Connection!con.Close
+	F.Intrinsic.Control.End
+F.Intrinsic.Control.Else
+	'reads the custom table to see if a directory path exists already
+	V.Local.sSQL.Set("SELECT DIRECTORY_PATH, FILE_TYPE FROM GCG_5850_FILE_INFO WHERE ID = 1")
+	F.ODBC.Connection!con.ExecuteAndReturn(V.Local.sSQL,V.Local.sRet)
+	F.Intrinsic.String.Split(V.Local.sRet,"*!*",V.Local.sRet)
+	V.Global.sSavedDirectoryPath.Set(V.Local.sRet(0))
+	V.Global.sSavedFileType.Set(V.Local.sRet(1))
+	'if the user has a directory path saved already, it will populate the text box with that path. It will also populate the combo box with the saved file type
+	F.Intrinsic.Control.If(V.Global.sSavedDirectoryPath.Trim,<>,"")
+		Gui.frmDirectory.txtDirectoryPath.Text(V.Global.sSavedDirectoryPath)
+		Gui.frmDirectory.cboFileType.Text(V.Global.sSavedFileType.Trim)
+		Gui.frmDirectory.cboFileType.AddItem("csv",0)
+		Gui.frmDirectory.cboFileType.AddItem("xlsx",1)
+		Gui.frmDirectory.cboFileType.AddItem("tab-delimited",2)
+	F.Intrinsic.Control.Else
+		'if the user does not have a file type or directory path saved, it will add the file types to the combo box list
+		Gui.frmDirectory.cboFileType.AddItem("csv",0)
+		Gui.frmDirectory.cboFileType.AddItem("xlsx",1)
+		Gui.frmDirectory.cboFileType.AddItem("tab-delimited",2)
+	F.Intrinsic.Control.EndIf
+	Gui.frmDirectory..Show
+F.Intrinsic.Control.EndIf
+
+F.Intrinsic.Control.Catch
+	F.Intrinsic.Control.CallSub(ErrorMessage, "ErrorNumber", V.Ambient.ErrorNumber, "ErrorDescription", V.Ambient.ErrorDescription, "Subroutine", V.Ambient.CurrentSubroutine, "UNATTENDED", V.Global.bUnattended, "Project", "5850", "ProjectTitle", "5850 Open Mind Work Order Data Extract", "Callback", "frmDirectory_Unload")
+F.Intrinsic.Control.EndTry
+Program.Sub.Main.End
+
+Program.Sub.LoadData.Start
+F.Intrinsic.Control.Try
+V.Local.sSQL.Declare(String)
+
+F.Intrinsic.Control.If(V.DataTable.dtJobData.Exists)
+	F.Data.DataTable.Close("dtJobData")
+F.Intrinsic.Control.EndIf
+'query to build out the data for the export
+v.Local.sSQL.Set("SELECT VJH.JOB, VJH.SUFFIX,VJO.SEQ,  VJO.PART AS WORKCENTER, VJH.PRIORITY, VJH.DATE_DUE, VJH.CUSTOMER_PO, VJH.PART, VJH.CUSTOMER, VJH.QTY_ORDER, (VJH.QTY_ORDER - VJH.QTY_COMPLETED) AS PCS_REMAINING, VIM.DESCRIPTION, VIM2.DESCRIPTION_2, VIM2.DESCRIPTION_3,VIM2.LENGTH, VIM2.WIDTH, VIM3.THICKNESS,  VIM.DENSITY_RAW_MATL FROM V_JOB_HEADER VJH LEFT JOIN V_JOB_OPERATIONS VJO ON VJH.JOB = VJO.JOB AND VJH.SUFFIX = VJO.SUFFIX LEFT JOIN V_INVENTORY_MSTR VIM ON VJO.PART = VIM.PART LEFT JOIN V_INVENTORY_MST2 VIM2 ON VIM.PART = VIM2.PART LEFT JOIN V_INVENTORY_MST3 VIM3 ON VIM2.PART = VIM3.PART WHERE VJH.DATE_CLOSED = '1900-01-01' AND VJO.LMO = 'L' AND VJO.SEQ < 900000 ")
+
+F.Data.DataTable.CreateFromSQL("dtJobData","con",V.Local.sSQL,True)
+
+F.Intrinsic.Control.Catch
+	F.Intrinsic.Control.CallSub(ErrorMessage, "ErrorNumber", V.Ambient.ErrorNumber, "ErrorDescription", V.Ambient.ErrorDescription, "Subroutine", V.Ambient.CurrentSubroutine, "UNATTENDED", V.Global.bUnattended, "Project", "5850", "ProjectTitle", "5850 Open Mind Work Order Data Extract", "Callback", "frmDirectory_Unload")
+F.Intrinsic.Control.EndTry
+Program.Sub.LoadData.End
+
+Program.Sub.SaveFile.Start
+F.Intrinsic.Control.Try
+V.Local.sSQL.Declare(String)
+V.Local.sRet.Declare(String)
+V.Local.sFQP.Declare(String)
+V.Local.sDataString.Declare(String)
+V.Local.sFields.Declare(String)
+V.Local.bExcelPresent.Declare(Boolean)
+V.Local.sExcelTempFQP.Declare(String)
+'The column headers in string form
+V.Local.sFields.Set("JOB*!*SUFFIX*!*SEQ*!*WORKCENTER*!*PRIORITY*!*DATE_DUE*!*CUSTOMER_PO*!*PART*!*CUSTOMER*!*QTY_ORDER*!*PCS_REMAINING*!*DESCRIPTION*!*DESCRIPTION_2*!*DESCRIPTION_3*!*LENGTH*!*WIDTH*!*THICKNESS*!*DENSITY_RAW_MATL")
+
+'pulling in the directory path and file type that were set up in the maintenance screen
+V.Local.sSQL.Set("SELECT DIRECTORY_PATH, FILE_TYPE FROM GCG_5850_FILE_INFO WHERE ID = 1")
+F.ODBC.Connection!con.ExecuteAndReturn(V.Local.sSQL,V.Local.sRet)
+F.Intrinsic.String.Split(V.Local.sRet,"*!*",V.Local.sRet)
+V.Global.sSavedDirectoryPath.Set(V.Local.sRet(0))
+f.Intrinsic.Control.If(V.Local.sRet(1).Trim,=,"tab-delimited")
+	V.Global.sSavedFileType.Set("txt")
+F.Intrinsic.Control.Else
+V.Global.sSavedFileType.Set(V.Local.sRet(1))
+f.Intrinsic.Control.EndIf
+
+'setting up the file path for the excel template
+F.Intrinsic.String.Build("{0}\GCG_5850_TEMPLATE.xlsx",V.Caller.FilesDir,V.Local.sExcelTempFQP)
+
+'building the file path for the export
+F.Intrinsic.String.Build("{0}\WO_EXPORT_{1}{2}.{3}",V.Global.sSavedDirectoryPath,V.Ambient.Date.FormatYYYYMMDD,V.Ambient.Time.FormatHHMMSS,V.Global.sSavedFileType,V.Local.sFQP)
+
+F.Intrinsic.Control.If(V.Global.sSavedFileType,=,"csv")
+	F.Data.DataTable.SaveToCSV("dtJobData",V.Local.sFQP,True)
+F.Intrinsic.Control.Elseif(V.Global.sSavedFileType,=,"xlsx")
+	F.Data.DataView.Create("dtJobData","dvJobData")
+	F.Data.DataView.ToString("dtJobData","dvJobData",v.Local.sFields,"*!*","$!$",V.Local.sDataString)
+	'adds the column headers to the data string to account for formatting
+	F.Intrinsic.String.Build("{0}$!${1}",V.Local.sFields,V.Local.sDataString,V.Local.sDataString)
+	F.Automation.MSExcel.CheckPresence(V.Local.bExcelPresent)
+	'if excel is installed on the server, it will write as an xlsx. If not, it will write the spreadsheet with OOCalc
+	F.Intrinsic.Control.If(V.Local.bExcelPresent)
+		F.Automation.MSExcel.WriteSpreadsheet(V.Local.sFQP,V.Local.sExcelTempFQP,V.Local.sDataString)
+		F.Data.DataView.Close("dtJobData","dvJobData")
+	F.Intrinsic.Control.Else
+		v.Global.sSavedFileType.Set("ods")
+		F.Intrinsic.String.Build("{0}\WO_EXPORT_{1}{2}.{3}",V.Global.sSavedDirectoryPath,V.Ambient.Date.FormatYYYYMMDD,V.Ambient.Time.FormatHHMMSS,V.Global.sSavedFileType,V.Local.sFQP)
+		F.Automation.OOCalc.WriteSpreadsheet(V.Local.sFQP,V.Local.sExcelTempFQP,False,V.Local.sDataString)
+		F.Data.DataView.Close("dtJobData","dvJobData")
+	F.Intrinsic.Control.EndIf
+F.Intrinsic.Control.Else
+	F.Data.DataView.Create("dtJobData","dvJobData")
+	F.Data.DataView.ToString("dtJobData","dvJobData",v.Local.sFields,V.Ambient.Tab,V.Ambient.NewLine,V.Local.sDataString)
+	F.Intrinsic.File.String2File(V.Local.sFQP,V.Local.sDataString)
+	F.Data.DataView.Close("dtJobData","dvJobData")
+F.Intrinsic.Control.EndIf
+
+F.Intrinsic.Control.Catch
+	F.Intrinsic.Control.CallSub(ErrorMessage, "ErrorNumber", V.Ambient.ErrorNumber, "ErrorDescription", V.Ambient.ErrorDescription, "Subroutine", V.Ambient.CurrentSubroutine, "UNATTENDED", V.Global.bUnattended, "Project", "5850", "ProjectTitle", "5850 Open Mind Work Order Data Extract", "Callback", "frmDirectory_Unload")
+F.Intrinsic.Control.EndTry
+Program.Sub.SaveFile.End
+
+Program.Sub.cmdFileBrowser_Click.Start
+F.Intrinsic.Control.Try
+V.Local.sDirectoryPath.Declare(String)
+
+F.Intrinsic.UI.FolderBrowser("Select Directory Path", V.Caller.Handle,V.Local.sDirectoryPath)
+F.Intrinsic.Control.If(V.Local.sDirectoryPath.IsNotCancel)
+	Gui.frmDirectory.txtDirectoryPath.Text(V.Local.sDirectoryPath)
+F.Intrinsic.Control.EndIf
+
+F.Intrinsic.Control.Catch
+	F.Intrinsic.Control.CallSub(ErrorMessage, "ErrorNumber", V.Ambient.ErrorNumber, "ErrorDescription", V.Ambient.ErrorDescription, "Subroutine", V.Ambient.CurrentSubroutine, "UNATTENDED", V.Global.bUnattended, "Project", "5850", "ProjectTitle", "5850 Open Mind Work Order Data Extract", "Callback", "frmDirectory_Unload")
+F.Intrinsic.Control.EndTry
+Program.Sub.cmdFileBrowser_Click.End
+
+Program.Sub.cmdSave_Click.Start
+F.Intrinsic.Control.Try
+V.Local.sSQL.Declare(String)
+V.Local.sPath.Declare(String)
+V.Local.sFileType.Declare(String)
+V.Local.sSavedPath.Declare(String)
+V.Local.sRegistrySQL.Declare(String)
+V.Local.iUserID.Declare(long)
+
+'Checks to see if the text box contains a path. If not, it will exit the sub to ensure spaces are not saved in the registry
+F.Intrinsic.Control.If(V.Screen.frmDirectory!txtDirectoryPath.Text,=,"","AND",v.Screen.frmDirectory!cboFileType.Value,=,"")
+	F.Intrinsic.UI.Msgbox("A directory path and file type must be selected before saving.","Warning")
+	F.Intrinsic.Control.ExitSub
+F.Intrinsic.Control.EndIf
+
+V.Local.sPath.Set(V.Screen.frmDirectory!txtDirectoryPath.Text)
+V.Local.sFileType.Set(V.Screen.frmDirectory!cboFileType.Text)
+'Reads the custom table to see if there is a path set up for the directory already. 
+F.Intrinsic.Control.If(V.Global.sSavedDirectoryPath,<>,"")
+	F.Intrinsic.Control.If(V.Local.sPath,<>,"")
+		'if the path in the saved in the table isn't the same as what's in the text box on the screen, it will delete the path from the registry and add the new path
+		F.Intrinsic.Control.If(V.Global.sSavedDirectoryPath.Trim,<>,V.Local.sPath.Trim,"AND", V.Global.sSavedFileType.Trim,<>,V.Local.sFileType)
+				F.Intrinsic.String.Build("UPDATE GCG_5850_FILE_INFO SET DIRECTORY_PATH = '{0}', FILE_TYPE = '{1}' WHERE ID = '1' ", V.Local.sPath, V.Local.sFileType,V.Local.sSQL)
+				F.ODBC.Connection!con.Execute(V.Local.sSQL)
+				F.Intrinsic.UI.Msgbox("Directory Path and File Type Updated!", "Information")
+		F.Intrinsic.Control.ElseIf(V.Global.sSavedDirectoryPath.Trim,<>,V.Local.sPath.Trim)
+			'If the file type hasn't changed, but the directory path did, update just the directory path
+			F.Intrinsic.String.Build("UPDATE GCG_5850_FILE_INFO SET DIRECTORY_PATH = '{0}' WHERE ID = '1' ", V.Local.sPath,V.Local.sSQL)
+			F.ODBC.Connection!con.Execute(V.Local.sSQL)
+			F.Intrinsic.UI.Msgbox("Directory Path Updated!", "Information")
+		F.Intrinsic.Control.ElseIf(V.Global.sSavedFileType.Trim,<>,V.Local.sFileType)
+			'If the directory path hasn't changed, but the file type did, update just the file type
+			F.Intrinsic.String.Build("UPDATE GCG_5850_FILE_INFO SET FILE_TYPE = '{0}' WHERE ID = '1' ", V.Local.sFileType,V.Local.sSQL)
+			F.ODBC.Connection!con.Execute(V.Local.sSQL)
+			F.Intrinsic.UI.Msgbox("File Type Updated!", "Information")
+		F.Intrinsic.Control.EndIf
+	F.Intrinsic.Control.Else
+		F.Intrinsic.UI.Msgbox("The directory path cannot be empty. Please enter or seelct a directory path.","Warning")
+		F.Intrinsic.Control.ExitSub
+	F.Intrinsic.Control.EndIf
+F.Intrinsic.Control.Else
+	'If a path doesn't exist in the table, it will be added to the table.
+	F.Intrinsic.String.Build("INSERT INTO GCG_5850_FILE_INFO (DIRECTORY_PATH, FILE_TYPE) VALUES ('{0}','{1}')", V.Local.sPath.Trim, V.Local.sFileType.Trim, V.Local.sSQL)
+	F.ODBC.Connection!con.Execute(V.Local.sSQL)
+	F.Intrinsic.UI.Msgbox("Directory Path and File Type Saved!", "Information")
+F.Intrinsic.Control.EndIf
+
+F.Intrinsic.Control.Catch
+	F.Intrinsic.Control.CallSub(ErrorMessage, "ErrorNumber", V.Ambient.ErrorNumber, "ErrorDescription", V.Ambient.ErrorDescription, "Subroutine", V.Ambient.CurrentSubroutine, "UNATTENDED", V.Global.bUnattended, "Project", "5850", "ProjectTitle", "5850 Open Mind Work Order Data Extract", "Callback", "frmDirectory_Unload")
+F.Intrinsic.Control.EndTry
+Program.Sub.cmdSave_Click.End
+
+Program.Sub.frmDirectory_Unload.Start
+F.Intrinsic.Control.Try
+
+F.ODBC.Connection!con.Close
+F.Intrinsic.Control.End
+
+F.Intrinsic.Control.Catch
+	F.Intrinsic.Control.CallSub(ErrorMessage, "ErrorNumber", V.Ambient.ErrorNumber, "ErrorDescription", V.Ambient.ErrorDescription, "Subroutine", V.Ambient.CurrentSubroutine, "UNATTENDED", V.Global.bUnattended, "Project", "5850", "ProjectTitle", "5850 Open Mind Work Order Data Extract", "Callback", "frmDirectory_Unload")
+F.Intrinsic.Control.EndTry
+Program.Sub.frmDirectory_Unload.End
+
+Program.Sub.ErrorMessage.Start
+'basic error message for replacing catch block
+'this is really just for when printing the message and ending program
+'pass error number, error description, current subroutine
+'optional callback sub, this will be called before ending
+'optional unattended parameters, those subs may not exist if not using them but won't be called
+F.Intrinsic.Control.Try
+
+V.Local.iError.Declare(Long)
+V.Local.sErrorDescription.Declare(String)
+V.Local.sSubroutine.Declare(String)
+V.Local.sError.Declare(String)
+V.Local.bExists.Declare(Boolean)
+V.Local.sCallback.Declare(String)
+V.Local.sRunningFile.Declare(String)
+V.Local.bRunning.Declare(boolean)
+
+V.Local.iError.Set(V.Args.ErrorNumber)
+V.Local.sErrorDescription.Set(V.Args.ErrorDescription)
+V.Local.sSubroutine.Set(V.Args.Subroutine)
+
+'make sure we aren't in an error loop
+F.Intrinsic.Control.If(V.Global.bError)
+	F.Intrinsic.Control.End
+F.Intrinsic.Control.EndIf
+V.Global.bError.Set(True)
+
+F.Intrinsic.String.Build("Project: {0}{1}{1}Subroutine: {2}{1}Error Occurred {3} with description {4}{1}{1}GAB Version: {5}", V.Caller.ScriptFile, V.Ambient.Newline, V.Local.sSubroutine, V.Local.iError, V.Local.sErrorDescription, V.Ambient.GABVersion, V.Local.sError)
+
+F.Intrinsic.Variable.ArgExists("UNATTENDED", V.Local.bExists)
+F.Intrinsic.Control.If(V.Local.bExists)
+	F.Intrinsic.Control.If(V.Args.UNATTENDED)
+		F.Intrinsic.Control.CallSub(UnattendedErrorMessage, "MESSAGE", V.Local.sError, "PROJECT", V.Args.PROJECT, "PROJECTTITLE", V.Args.PROJECTTITLE)
+	F.Intrinsic.Control.Else
+		F.Intrinsic.UI.Msgbox(V.Local.sError)
+	F.Intrinsic.Control.EndIf
+F.Intrinsic.Control.Else
+	F.Intrinsic.UI.Msgbox(V.Local.sError)
+F.Intrinsic.Control.EndIf
+
+F.Intrinsic.Variable.ArgExists("Callback", V.Local.bExists)
+F.Intrinsic.Control.If(V.Local.bExists)
+	V.Local.sCallback.Set(V.Args.Callback.Trim)
+	F.Intrinsic.Control.CallSub(V.Local.sCallback)
+F.Intrinsic.Control.EndIf
+
+F.Intrinsic.String.Build("{0}\IsRunning.txt",V.Caller.FilesDir,V.Local.sRunningFile)
+F.Intrinsic.File.Exists(V.Local.sRunningFile,V.Local.bRunning)
+'Deletes the isRunning file if the script errors out
+F.Intrinsic.Control.If(V.Local.bRunning,=,True)
+	F.Intrinsic.File.DeleteFile(V.Local.sRunningFile)
+F.Intrinsic.Control.EndIf
+
+F.Intrinsic.Control.End
+
+F.Intrinsic.Control.Catch
+	F.Intrinsic.String.Build("Project: {0}{1}{1}Subroutine: {2}{1}Error Occurred {3} with description {4}{1}{1}GAB Version: {5}",V.Caller.ScriptFile,V.Ambient.Newline,V.Ambient.CurrentSubroutine,V.Ambient.ErrorNumber,V.Ambient.ErrorDescription,V.Ambient.GABVersion,V.Local.sError)
+	F.Intrinsic.UI.Msgbox(V.Local.sError)
+	F.Intrinsic.Control.End
+F.Intrinsic.Control.EndTry
+Program.Sub.ErrorMessage.End
